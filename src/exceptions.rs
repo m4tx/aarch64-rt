@@ -192,7 +192,6 @@ macro_rules! exception_handlers {
  * to do so. This makes the handler 18 instructions.
  */
 .macro current_exception_sp0 handler:req el:req
-	msr spsel, #1
 	save_volatile_to_stack \el
 	mov x0, sp
 	bl \handler
@@ -296,19 +295,16 @@ vector_table el3
 .section .text.restore_volatile_from_stack_sp0_el1, "ax"
 restore_volatile_from_stack_sp0_el1:
 	restore_volatile_from_stack el1
-	msr spsel, #0
 	eret
 
 .section .text.restore_volatile_from_stack_sp0_el3, "ax"
 restore_volatile_from_stack_sp0_el2:
 	restore_volatile_from_stack el2
-	msr spsel, #0
 	eret
 
 .section .text.restore_volatile_from_stack_sp0_el3, "ax"
 restore_volatile_from_stack_sp0_el3:
 	restore_volatile_from_stack el3
-	msr spsel, #0
 	eret
             "#,
             sync_current = sym <$handlers as $crate::ExceptionHandlers>::sync_current,

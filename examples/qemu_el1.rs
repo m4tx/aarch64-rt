@@ -12,12 +12,13 @@ use aarch64_paging::{
     paging::Attributes,
 };
 use aarch64_rt::{
-    ExceptionHandlers, InitialPagetable, entry, exception_handlers, initial_pagetable,
+    ExceptionHandlers, InitialPagetable, RegisterStateRef, entry, exception_handlers,
+    initial_pagetable,
 };
 use arm_pl011_uart::{PL011Registers, Uart, UniqueMmioPointer};
-use core::{fmt::Write, panic::PanicInfo, ptr::NonNull};
+use core::{arch::asm, fmt::Write, panic::PanicInfo, ptr::NonNull};
 use smccc::{
-    Hvc,
+    Smc,
     psci::{system_off, system_reset},
 };
 
@@ -81,17 +82,77 @@ fn main(arg0: u64, arg1: u64, arg2: u64, arg3: u64) -> ! {
     )
     .unwrap();
 
-    system_off::<Hvc>().unwrap();
+
+    let mut xd: u64;
+    unsafe {
+        asm!("mrs {}, spsr_el2", out(reg) xd);
+    }
+    xd &= !0x1;
+    unsafe {
+        asm!("msr spsr_el2, {}", in(reg) xd);
+    }
+
+    // Initialize SP_EL0 with current stack pointer
+    let current_sp: u64;
+    unsafe {
+        asm!("mov {}, sp", out(reg) current_sp);
+        asm!("msr sp_el0, {}", in(reg) current_sp);
+    }
+
+    unsafe { asm!("msr spsel, #0"); }
+
+    let spsel: u64;
+    unsafe {
+        asm!("mrs {}, spsel", out(reg) spsel);
+    }
+    writeln!(uart, "SPSel before: {:#x}", spsel).unwrap();
+
+    // Trigger exception
+    unsafe {
+        asm!("svc #0", options(nomem, nostack));
+    }
+
+    let spsel: u64;
+    unsafe {
+        asm!("mrs {}, spsel", out(reg) spsel);
+    }
+    writeln!(uart, "SPSel after exception: {:#x}", spsel).unwrap();
+
+    system_off::<Smc>().unwrap();
     panic!("system_off returned");
 }
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    system_reset::<Hvc>().unwrap();
+    system_reset::<Smc>().unwrap();
     #[allow(clippy::empty_loop)]
     loop {}
 }
 
 struct Exceptions;
 
-impl ExceptionHandlers for Exceptions {}
+impl ExceptionHandlers for Exceptions {
+    extern "C" fn sync_current(mut register_state: RegisterStateRef) {
+        let mut uart =
+            Uart::new(unsafe { UniqueMmioPointer::new(NonNull::new(PL011_BASE_ADDRESS).unwrap()) });
+        let spsel: u64;
+        unsafe {
+            asm!("mrs {}, spsel", out(reg) spsel);
+        }
+        writeln!(uart, "In exception handler, SPSel: {:#x}", spsel).unwrap();
+
+        let spsr = register_state.spsr;
+        writeln!(uart, "SPSR before modification: {:#x}", spsr).unwrap();
+
+        // Switch to SP_EL0 on return.
+        unsafe {
+            register_state.get_mut().spsr |= 0;
+        }
+        writeln!(
+            uart,
+            "SPSR after modification: {:#x}",
+            register_state.spsr
+        )
+        .unwrap();
+    }
+}
